@@ -1,0 +1,16 @@
+name = "planner-bot"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Часовой пояс Самары — UTC+4 (240 минут)
+[vars]
+TZ_OFFSET_MIN = "240"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "planner-bot"
+database_id = "3d3e0ac9-1b05-4ac7-a0e5-4890dfe3a233"
+
+[triggers]
+crons = ["0 * * * *"]
