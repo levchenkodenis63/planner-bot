@@ -7,13 +7,18 @@ function dayHeader(day) {
   return `📅 <b>${fmtDate(day.date)}</b>`;
 }
 
+export function taskLabel(t) {
+  if (!t.deadline) return esc(t.title);
+  return `${esc(t.title)} (${t.overdue ? '⚠️ ' : ''}до ${fmtShort(t.deadline)})`;
+}
+
 function itemLine(it, detailed) {
   const time = `${fmtTime(it.from)}–${fmtTime(it.to)}`;
   if (it.kind === 'project') {
     let s = `${time} 💼 <b>${esc(it.project.name)}</b> · ${fmtHours(it.hours)}`;
     if (it.reduced) s += ' <i>(урезано)</i>';
     if (it.overdue) s += ' ⚠️ <i>дедлайн прошёл</i>';
-    if (detailed && it.nextTasks.length) s += '\n      ↳ ' + it.nextTasks.map((t) => esc(t.title)).join('; ');
+    if (detailed && it.nextTasks.length) s += '\n      ↳ ' + it.nextTasks.map(taskLabel).join('; ');
     return s;
   }
   if (it.kind === 'poster') {

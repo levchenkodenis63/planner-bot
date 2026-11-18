@@ -210,4 +210,53 @@ await test('morning notification: once, only near the set time', async () => {
   assert.equal(calls.length, 1);
 });
 
+
+await test('planner: tasks by deadline, project with nearest task goes first, overdue flagged', () => {
+  const tasks = [
+    { id: 1, project_id: 1, title: 'a-late', deadline: '2026-11-30', done: 0 },
+    { id: 2, project_id: 1, title: 'a-none', deadline: null, done: 0 },
+    { id: 3, project_id: 2, title: 'b-soon', deadline: '2026-11-17', done: 0 },
+    { id: 4, project_id: 1, title: 'a-soon', deadline: '2026-11-20', done: 0 },
+  ];
+  const plan = buildPlan({ start: '2026-11-18', days: 1, settings, projects, tasks, posters: [], shoots: [] });
+  const pr = plan.days[0].items.filter((i) => i.kind === 'project');
+  assert.deepEqual(pr.map((i) => i.project.name), ['B', 'A']);
+  assert.deepEqual(pr[1].nextTasks.map((t) => t.title), ['a-soon', 'a-late']);
+  assert.equal(pr[0].nextTasks[0].overdue, true);
+  assert.equal(pr[1].nextTasks[0].overdue, false);
+});
+
+await test('bot: task deadlines (default +7, explicit, multi-line, /taskdate)', async () => {
+  const t0 = todayLocal(240);
+  sqlite.exec('DELETE FROM project_tasks');
+  const r = await say(`/task crm | Схема БД\nАPI заказов | ${fmtShort(addDays(t0, 2))}\nЛоманая | 32.13`);
+  assert.match(r, /добавлено задач: 2/);
+  assert.match(r, /не понял дату/);
+  const rows = sqlite.prepare('SELECT id, title, deadline FROM project_tasks ORDER BY id').all();
+  assert.equal(rows[0].deadline, addDays(t0, 7));
+  assert.equal(rows[1].deadline, addDays(t0, 2));
+
+  sqlite.exec("UPDATE projects SET active = 1");
+  const today = await say('/today');
+  assert.ok(today.indexOf('АPI заказов') < today.indexOf('Схема БД'), 'nearest task first');
+  assert.match(today, /<b>CRM Бета<\/b>[^\n]*\n\s+↳ АPI заказов \(до/);
+
+  assert.match(await say(`/taskdate ${rows[0].id} ${fmtShort(addDays(t0, -1))}`), /до/);
+  const list = await say('/tasks');
+  assert.match(list, /Схема БД \(⚠️ до/);
+  assert.ok(list.indexOf('Схема БД') < list.indexOf('АPI заказов'));
+  assert.match(await say('/taskdate 999 25.11'), /нет/);
+  console.log('\n===== /tasks =====\n' + list + '\n\n===== /today =====\n' + today + '\n');
+});
+
+await test('migration upgrades an old database', () => {
+  const old = new Database(':memory:');
+  const oldSchema = fs.readFileSync(new URL('../schema.sql', import.meta.url), 'utf8').replace('  deadline TEXT,\n  done INTEGER', '  done INTEGER');
+  old.exec(oldSchema);
+  old.exec("INSERT INTO projects (name, daily_hours) VALUES ('P', 3)");
+  old.exec("INSERT INTO project_tasks (project_id, title, created_at) VALUES (1, 'old', '2026-11-10 09:00:00')");
+  old.exec(fs.readFileSync(new URL('../migrations/0001_task_deadline.sql', import.meta.url), 'utf8'));
+  assert.equal(old.prepare('SELECT deadline FROM project_tasks').get().deadline, '2026-11-17');
+});
+
 console.log(`\nВсе тесты пройдены: ${passed}`);

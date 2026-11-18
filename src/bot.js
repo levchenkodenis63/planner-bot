@@ -1,7 +1,7 @@
 import * as db from './db.js';
 import { tg, send, esc } from './telegram.js';
 import { buildPlan } from './planner.js';
-import { renderPlan, renderDay } from './format.js';
+import { renderPlan, renderDay, taskLabel } from './format.js';
 import {
   todayLocal,
   localHourMinute,
@@ -46,8 +46,10 @@ const HELP = `<b>Планировщик задач</b>
 <b>Проекты</b> (часы в день)
 /project Название | 3 | 31.01 — добавить/изменить (срок необязателен)
 /projects — список, пауза/завершение
-/task Название | задача — задача в проект (можно несколько строк)
-/tasks [проект] — открытые задачи
+/task Проект | задача | срок — задача (без срока — неделя)
+  несколько задач: каждая с новой строки «задача | срок»
+/tasks [проект] — открытые задачи по сроку
+/taskdate 5 25.11 — изменить срок задачи
 
 <b>Постеры</b>
 Перешлите сообщение клиента — заказ создастся сам.
@@ -170,27 +172,70 @@ async function tasksView(env, projectId) {
     if (!groups.has(t.project_id)) groups.set(t.project_id, []);
     groups.get(t.project_id).push(t);
   }
+  const t0 = today(env);
   const text = [...groups]
-    .map(([pid, list]) => `💼 <b>${esc(name(pid))}</b>\n` + list.map((t) => `  • ${esc(t.title)}`).join('\n'))
+    .map(
+      ([pid, list]) =>
+        `💼 <b>${esc(name(pid))}</b>\n` +
+        list.map((t) => `  <b>#${t.id}</b> ${taskLabel({ ...t, overdue: !!(t.deadline && t.deadline < t0) })}`).join('\n')
+    )
     .join('\n\n');
   const keyboard = tasks.slice(0, 50).map((t) => [
     { text: `✅ ${t.title}`.slice(0, 60), callback_data: `td:${t.id}:${projectId || 0}` },
   ]);
-  return { text: `<b>Задачи</b>\n\n${text}`, reply_markup: { inline_keyboard: keyboard } };
+  return {
+    text: `<b>Задачи</b> (по сроку)\n\n${text}\n\nИзменить срок: /taskdate номер 25.11`,
+    reply_markup: { inline_keyboard: keyboard },
+  };
 }
 
 async function cmdTask(env, chatId, args) {
   const lines = args.split('\n');
   const first = lines.shift() || '';
   const idx = first.indexOf('|');
-  if (idx < 0) return send(env, chatId, 'Формат: /task Проект | задача\nМожно несколько задач — каждая с новой строки.');
+  if (idx < 0) {
+    return send(
+      env,
+      chatId,
+      'Формат: /task Проект | задача | срок\nСрок необязателен — по умолчанию неделя.\nНесколько задач — каждая с новой строки: «задача | срок».'
+    );
+  }
   const ref = first.slice(0, idx).trim();
-  const titles = [first.slice(idx + 1), ...lines].map((s) => s.trim()).filter(Boolean);
   const project = await db.findProject(env.DB, ref);
   if (!project) return send(env, chatId, `Проект «${esc(ref)}» не найден. Список: /projects`);
-  if (!titles.length) return send(env, chatId, 'Пустая задача.');
-  for (const t of titles) await db.addTask(env.DB, project.id, t);
-  return send(env, chatId, `✅ В «${esc(project.name)}» добавлено задач: ${titles.length}`);
+
+  const t0 = today(env);
+  const added = [];
+  const errors = [];
+  for (const line of [first.slice(idx + 1), ...lines].map((s) => s.trim()).filter(Boolean)) {
+    const parts = line.split('|').map((s) => s.trim());
+    const title = parts[0];
+    const dl = parts[1];
+    if (!title) continue;
+    const deadline = dl ? parseDate(dl, t0) : addDays(t0, 7);
+    if (!deadline) {
+      errors.push(`«${esc(line)}» — не понял дату «${esc(dl)}»`);
+      continue;
+    }
+    await db.addTask(env.DB, project.id, title, deadline);
+    added.push(`• ${esc(title)} — до ${fmtDate(deadline)}`);
+  }
+  let text = added.length
+    ? `✅ В «${esc(project.name)}» добавлено задач: ${added.length}\n${added.join('\n')}`
+    : 'Ничего не добавлено.';
+  if (errors.length) text += `\n\n⚠️ Пропущено:\n${errors.join('\n')}`;
+  return send(env, chatId, text);
+}
+
+async function cmdTaskDate(env, chatId, args) {
+  const m = args.match(/^#?(\d+)\s+(.+)$/);
+  if (!m) return send(env, chatId, 'Формат: /taskdate 5 25.11 (номер задачи — в /tasks)');
+  const task = await db.getTask(env.DB, Number(m[1]));
+  if (!task || task.done) return send(env, chatId, `Открытой задачи #${m[1]} нет.`);
+  const d = parseDate(m[2], today(env));
+  if (!d) return send(env, chatId, `Не понял дату «${esc(m[2])}».`);
+  await db.setTaskDeadline(env.DB, task.id, d);
+  return send(env, chatId, `🗓 Задача #${task.id} «${esc(task.title)}»: до ${fmtDate(d)}`);
 }
 
 async function cmdTasks(env, chatId, args) {
@@ -583,6 +628,8 @@ export async function handleUpdate(update, env) {
       return sendView(env, chatId, await projectsView(env));
     case 'task':
       return cmdTask(env, chatId, args);
+    case 'taskdate':
+      return cmdTaskDate(env, chatId, args);
     case 'tasks':
       return cmdTasks(env, chatId, args);
     case 'poster':
@@ -646,6 +693,7 @@ export const COMMANDS = [
   ['projects', 'Проекты'],
   ['project', 'Добавить/изменить проект'],
   ['tasks', 'Задачи по проектам'],
+  ['task', 'Добавить задачу в проект'],
   ['settings', 'Настройки'],
   ['help', 'Справка'],
 ].map(([command, description]) => ({ command, description }));

@@ -54,8 +54,13 @@ export function buildPlan({ start, days, settings, projects, tasks = [], posters
       return (a.created_at || '') < (b.created_at || '') ? -1 : a.id - b.id;
     });
 
-  const active = projects.filter((p) => p.active);
-  const openTasks = (pid) => tasks.filter((t) => t.project_id === pid && !t.done);
+  const byDeadline = (a, b) =>
+    (a.deadline || '9999') < (b.deadline || '9999') ? -1 : (a.deadline || '9999') > (b.deadline || '9999') ? 1 : a.id - b.id;
+  const openTasks = (pid) => tasks.filter((t) => t.project_id === pid && !t.done).sort(byDeadline);
+  const nearest = (pid) => openTasks(pid)[0]?.deadline || '9999';
+  const active = projects
+    .filter((p) => p.active)
+    .sort((a, b) => (nearest(a.id) < nearest(b.id) ? -1 : nearest(a.id) > nearest(b.id) ? 1 : a.id - b.id));
 
   const take = (p, cap, d, urgent, items) => {
     const h = Math.min(p.left, cap);
@@ -107,7 +112,7 @@ export function buildPlan({ start, days, settings, projects, tasks = [], posters
         hours: h,
         reduced: h + EPS < pr.daily_hours,
         overdue: !!(pr.deadline && d > pr.deadline),
-        nextTasks: openTasks(pr.id).slice(0, 2),
+        nextTasks: openTasks(pr.id).slice(0, 2).map((t) => ({ ...t, overdue: !!(t.deadline && t.deadline < d) })),
       });
     }
 

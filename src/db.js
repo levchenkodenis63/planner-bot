@@ -75,15 +75,28 @@ export function setProjectActive(db, id, active) {
   return db.prepare('UPDATE projects SET active = ? WHERE id = ?').bind(active, id).run();
 }
 
+const TASK_ORDER = 'ORDER BY deadline IS NULL, deadline, id';
+
 export async function listTasks(db, projectId = null) {
   const q = projectId
-    ? db.prepare('SELECT * FROM project_tasks WHERE done = 0 AND project_id = ? ORDER BY id').bind(projectId)
-    : db.prepare('SELECT * FROM project_tasks WHERE done = 0 ORDER BY id');
+    ? db.prepare(`SELECT * FROM project_tasks WHERE done = 0 AND project_id = ? ${TASK_ORDER}`).bind(projectId)
+    : db.prepare(`SELECT * FROM project_tasks WHERE done = 0 ${TASK_ORDER}`);
   return (await q.all()).results;
 }
 
-export function addTask(db, projectId, title) {
-  return db.prepare('INSERT INTO project_tasks (project_id, title) VALUES (?, ?)').bind(projectId, title).run();
+export function addTask(db, projectId, title, deadline) {
+  return db
+    .prepare('INSERT INTO project_tasks (project_id, title, deadline) VALUES (?, ?, ?)')
+    .bind(projectId, title, deadline)
+    .run();
+}
+
+export function getTask(db, id) {
+  return db.prepare('SELECT * FROM project_tasks WHERE id = ?').bind(id).first();
+}
+
+export function setTaskDeadline(db, id, deadline) {
+  return db.prepare('UPDATE project_tasks SET deadline = ? WHERE id = ?').bind(deadline, id).run();
 }
 
 export function doneTask(db, id) {
